@@ -65,7 +65,7 @@ class CKPlusPairedDataset(Dataset):
         target_emotion: Optional specific target emotion(s) to filter for (e.g., 'happiness' or ['happiness', 'anger'])
                         If None, includes all non-neutral emotions
     """
-    def __init__(self, data_path='../processed_data/aligned_ck_data.pkl', 
+    def __init__(self, data_path, 
                  split_df=None, image_size=224, augmentation_factor=0,
                  target_emotion=None):
         # Load the processed data
@@ -201,9 +201,9 @@ class CKPlusPairedDataset(Dataset):
         target_path = target_entry['image_path']
         target_emotion = target_entry['emotion']
 
-        # Load images as grayscale
-        source_image = Image.open(source_path).convert('L')
-        target_image = Image.open(target_path).convert('L')
+        # Load images as RGB
+        source_image = Image.open(source_path).convert('RGB')
+        target_image = Image.open(target_path).convert('RGB')
 
         # Determine if this is an original or augmented sample
         is_augmented = idx >= self.num_original_pairs
@@ -252,12 +252,12 @@ class CKPlusNeutralHappyDataset(CKPlusPairedDataset):
     
     This is a convenience class that filters for only 'happiness' emotion
     """
-    def __init__(self, data_path='../processed_data/aligned_ck_data.pkl', 
+    def __init__(self, data_path, 
                  split_df=None, image_size=224, augmentation_factor=0):
         super().__init__(data_path, split_df, image_size, augmentation_factor, 
                          target_emotion='happiness')
 
-def create_dataloaders(data_path='../processed_data/aligned_ck_data.pkl',
+def create_dataloaders(data_path,
                        image_size=224,
                        batch_size=16, 
                        num_workers=2,

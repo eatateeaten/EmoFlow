@@ -204,9 +204,9 @@ class KDEFPairedDataset(Dataset):
         target_path = target_entry['image_path']
         target_emotion = target_entry['emotion']
 
-        # Load images as grayscale (stay compatible with CK+)
-        source_image = Image.open(source_path).convert('L')
-        target_image = Image.open(target_path).convert('L')
+        # Load images as RGB
+        source_image = Image.open(source_path).convert('RGB')
+        target_image = Image.open(target_path).convert('RGB')
 
         # Determine if this is an original or augmented sample
         is_augmented = idx >= self.num_original_pairs
