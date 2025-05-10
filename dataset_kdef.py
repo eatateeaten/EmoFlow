@@ -65,7 +65,7 @@ class KDEFPairedDataset(Dataset):
         target_emotion: Optional specific target emotion(s) to filter for (e.g., 'happiness' or ['happiness', 'anger'])
                         If None, includes all non-neutral emotions
     """
-    def __init__(self, data_path='../processed_data/aligned_kdef_data.pkl', 
+    def __init__(self, data_path, 
                  split_df=None, image_size=224, augmentation_factor=0,
                  target_emotion=None):
         # Load the processed data
@@ -195,13 +195,13 @@ class KDEFPairedDataset(Dataset):
 
         # Get source image data (neutral)
         source_entry = self.df.iloc[source_idx]
-        source_path = "../" + source_entry['image_path']
+        source_path = source_entry['image_path']
         source_emotion = source_entry['emotion']
         subject_id = source_entry['subject_id']
 
         # Get target image data (non-neutral emotion)
         target_entry = self.df.iloc[target_idx]
-        target_path = "../" + target_entry['image_path']
+        target_path = target_entry['image_path']
         target_emotion = target_entry['emotion']
 
         # Load images as grayscale (stay compatible with CK+)
@@ -255,12 +255,12 @@ class KDEFNeutralHappyDataset(KDEFPairedDataset):
     
     This is a convenience class that filters for only 'happiness' emotion
     """
-    def __init__(self, data_path='../processed_data/aligned_kdef_data.pkl', 
+    def __init__(self, data_path, 
                  split_df=None, image_size=224, augmentation_factor=0):
         super().__init__(data_path, split_df, image_size, augmentation_factor, 
                          target_emotion='happiness')
 
-def create_dataloaders(data_path='../processed_data/aligned_kdef_data.pkl',
+def create_dataloaders(data_path,
                        image_size=224,
                        batch_size=16, 
                        num_workers=2,

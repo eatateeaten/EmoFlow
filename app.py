@@ -257,8 +257,8 @@ if __name__ == "__main__":
     # Load validation dataset
     print("Loading validation dataset...")
     _, val_loader = create_combined_dataloaders(
-        ckplus_data_path='../processed_data/aligned_ck_data.pkl',
-        kdef_data_path='../processed_data/aligned_kdef_data.pkl',
+        ckplus_data_path='data/aligned_ck_data.pkl',
+        kdef_data_path='data/aligned_kdef_data.pkl',
         image_size=config.IMAGE_SIZE,
         batch_size=8,  # Small batch for display
         num_workers=config.NUM_WORKERS,

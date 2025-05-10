@@ -12,3 +12,4 @@ wandb
 gradio
 matplotlib
 scipy
+lpips

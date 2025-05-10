@@ -192,13 +192,13 @@ class CKPlusPairedDataset(Dataset):
 
         # Get source image data (neutral)
         source_entry = self.df.iloc[source_idx]
-        source_path = "../" + source_entry['image_path']
+        source_path = source_entry['image_path']
         source_emotion = source_entry['emotion']
         subject_id = source_entry['subject_id']
 
         # Get target image data (non-neutral emotion)
         target_entry = self.df.iloc[target_idx]
-        target_path = "../" + target_entry['image_path']
+        target_path = target_entry['image_path']
         target_emotion = target_entry['emotion']
 
         # Load images as grayscale

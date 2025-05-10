@@ -11,15 +11,20 @@ A deep learning system for editing facial expressions while preserving identity,
 ## Installation
 
 1. Clone the repository:
-   ```bash
-   git clone [repository-url]
-   cd [repository-directory]
-   ```
+```bash
+git clone [repo]
+cd emoflow
+```
 
 2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+pip install -r requirements.txt
+```
+
+3. Apply patch to torchcfm:
+```bash
+python patch.py  # fix the path in the file if it's not correct
+```
 
 ## Usage
 

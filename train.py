@@ -225,8 +225,8 @@ def train_unet(target_emotion=None):
     
     print(f"Loading paired data...")
     train_loader, val_loader = create_combined_dataloaders(
-        ckplus_data_path='../processed_data/aligned_ck_data.pkl',
-        kdef_data_path='../processed_data/aligned_kdef_data.pkl',
+        ckplus_data_path=config.CK_PATH,
+        kdef_data_path=config.KDEF_PATH,
         image_size=config.IMAGE_SIZE,
         batch_size=config.BATCH_SIZE,
         num_workers=config.NUM_WORKERS,
@@ -306,8 +306,6 @@ def train_unet(target_emotion=None):
         # Create a clean dictionary for wandb config
         wandb_config = {
             # Data settings
-            'data_path': config.DATA_PATH,
-            'splits_path': config.SPLITS_PATH,
             'image_size': config.IMAGE_SIZE,
             'batch_size': config.BATCH_SIZE,
             'num_workers': config.NUM_WORKERS,
@@ -707,8 +705,8 @@ def evaluate_emotions(model, device, emotions=None, num_samples=4):
     
     # Load validation data - asking specifically for neutral source images paired with any target emotion
     _, val_loader = create_combined_dataloaders(
-        ckplus_data_path='../processed_data/aligned_ck_data.pkl',
-        kdef_data_path='../processed_data/aligned_kdef_data.pkl',
+        ckplus_data_path=config.CK_PATH,
+        kdef_data_path=config.KDEF_PATH,
         image_size=config.IMAGE_SIZE,
         batch_size=num_samples,  # Just need a small batch
         num_workers=1,

@@ -9,8 +9,8 @@ from dataset_ck import CKPlusPairedDataset
 from dataset_kdef import KDEFPairedDataset
 
 def create_combined_dataloaders(
-    ckplus_data_path='../processed_data/aligned_ck_data.pkl',
-    kdef_data_path='../processed_data/aligned_kdef_data.pkl',
+    ckplus_data_path='data/aligned_ck_data.pkl',
+    kdef_data_path='data/aligned_kdef_data.pkl',
     image_size=224,
     batch_size=16,
     num_workers=2,
