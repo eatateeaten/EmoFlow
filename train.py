@@ -7,6 +7,8 @@ import wandb
 import numpy as np
 import random
 import math
+import matplotlib.pyplot as plt
+from io import BytesIO
 
 # Import LPIPS loss for perceptual similarity
 from lpips_loss import LPIPSLoss
@@ -18,6 +20,7 @@ from torchvision.transforms import Resize
 
 # Import dataset and config
 from dataset_combined import create_combined_dataloaders
+#from dataset_kdef import create_dataloaders as create_combined_dataloaders
 import config
 
 def set_seed(seed):
@@ -231,7 +234,7 @@ def train_unet(target_emotion=None):
         batch_size=config.BATCH_SIZE,
         num_workers=config.NUM_WORKERS,
         target_emotion=None,  # Now accepts a list of emotions or a single emotion
-        augmentation_factor=0
+        augmentation_factor=config.AUGMENTATION_FACTOR
     )
 
     print(f"Training with {len(train_loader.dataset)} pairs, validating with {len(val_loader.dataset)} pairs")
@@ -353,6 +356,7 @@ def train_unet(target_emotion=None):
         total_train_loss = 0.0
         total_flow_matching_loss = 0.0
         total_perceptual_loss = 0.0
+        total_lpips_loss = 0.0
         num_batches = 0
 
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.EPOCHS} [Train]")
@@ -435,7 +439,6 @@ def train_unet(target_emotion=None):
             total_train_loss += total_loss.item()
             total_flow_matching_loss += flow_matching_loss.item()
             total_perceptual_loss += perceptual_loss_val.item() if config.USE_PERCEPTUAL_LOSS else 0
-            total_lpips_loss = 0.0 if 'total_lpips_loss' not in locals() else total_lpips_loss
             total_lpips_loss += lpips_loss_val.item() if config.USE_LPIPS_LOSS else 0
             num_batches += 1
 
@@ -630,28 +633,84 @@ def train_unet(target_emotion=None):
                 model_path = os.path.join(config.CHECKPOINT_DIR, "unet_best.pt")
                 torch.save(model.state_dict(), model_path)
                 print(f"New best model saved with validation loss: {avg_val_loss:.6f}")
+                
+            # Log validation metrics if using wandb
+            if config.LOG_TO_WANDB:
+                # Log validation metrics (with clear naming for charts)
+                wandb_log_data = {
+                    # Main scalar metrics with clear chart paths
+                    'validation/total_loss': avg_val_loss,
+                    'validation/flow_matching_loss': avg_val_flow_matching_loss,
+                    'validation/perceptual_loss': avg_val_perceptual_loss,
+                    'validation/lpips_loss': avg_val_lpips_loss,
+                    
+                    # Current epoch for x-axis alignment
+                    'epoch': epoch
+                }
+                
+                # Log the validation metrics
+                wandb.log(wandb_log_data)
+                
+                # Log comparison charts of train vs validation
+                wandb.log({
+                    'comparison/total_loss': {
+                        'train': avg_train_loss,
+                        'validation': avg_val_loss
+                    },
+                    'comparison/flow_matching_loss': {
+                        'train': avg_flow_matching_loss, 
+                        'validation': avg_val_flow_matching_loss
+                    },
+                    'comparison/perceptual_loss': {
+                        'train': avg_perceptual_loss,
+                        'validation': avg_val_perceptual_loss
+                    },
+                    'comparison/lpips_loss': {
+                        'train': avg_lpips_loss,
+                        'validation': avg_val_lpips_loss
+                    },
+                    'epoch': epoch
+                })
+                
+                # Create a custom chart for loss comparison
+                fig, ax = plt.subplots(figsize=(10, 6))
+                
+                # Bar chart showing different loss components
+                labels = ['Total Loss', 'Flow Matching', 'Perceptual', 'LPIPS']
+                train_values = [avg_train_loss, avg_flow_matching_loss, avg_perceptual_loss, avg_lpips_loss]
+                val_values = [avg_val_loss, avg_val_flow_matching_loss, avg_val_perceptual_loss, avg_val_lpips_loss]
+                
+                x = np.arange(len(labels))
+                width = 0.35
+                
+                # Plot bars
+                ax.bar(x - width/2, train_values, width, label='Train')
+                ax.bar(x + width/2, val_values, width, label='Validation')
+                
+                # Add labels and legend
+                ax.set_ylabel('Loss Value')
+                ax.set_title(f'Loss Components - Epoch {epoch+1}')
+                ax.set_xticks(x)
+                ax.set_xticklabels(labels)
+                ax.legend()
+                
+                plt.tight_layout()
+                plt.close(fig)
 
         # Save checkpoint at intervals
         if (epoch + 1) % config.SAVE_INTERVAL == 0:
             checkpoint_path = os.path.join(config.CHECKPOINT_DIR, f"unet_epoch_{epoch+1}.pt")
             torch.save(model.state_dict(), checkpoint_path)
             print(f"Checkpoint saved at epoch {epoch+1}")
-
-        # Log to wandb if enabled
+            
+        # Log training metrics to wandb
         if config.LOG_TO_WANDB:
             wandb.log({
-                'epoch': epoch,
-                'train_loss': avg_train_loss,
-                'train_flow_matching_loss': avg_flow_matching_loss,
-                'train_perceptual_loss': avg_perceptual_loss,
-                'train_lpips_loss': avg_lpips_loss,
-                'validation_loss': avg_val_loss if (epoch + 1) % config.EVALUATION_INTERVAL == 0 or epoch == config.EPOCHS - 1 else None,
-                'validation_flow_matching_loss': avg_val_flow_matching_loss if (epoch + 1) % config.EVALUATION_INTERVAL == 0 or epoch == config.EPOCHS - 1 else None,
-                'validation_perceptual_loss': avg_val_perceptual_loss if (epoch + 1) % config.EVALUATION_INTERVAL == 0 or epoch == config.EPOCHS - 1 else None,
-                'validation_lpips_loss': avg_val_lpips_loss if (epoch + 1) % config.EVALUATION_INTERVAL == 0 or epoch == config.EPOCHS - 1 else None,
-                'best_val_loss': best_val_loss,
-                'using_perceptual_loss': epoch >= config.PERCEPTUAL_LOSS_DELAY_EPOCHS and config.USE_PERCEPTUAL_LOSS,
-                'using_lpips_loss': epoch >= config.LPIPS_LOSS_DELAY_EPOCHS and config.USE_LPIPS_LOSS
+                'train/epoch_loss': avg_train_loss,
+                'train/flow_matching_loss': avg_flow_matching_loss,
+                'train/perceptual_loss': avg_perceptual_loss,
+                'train/lpips_loss': avg_lpips_loss,
+                'epoch': epoch
             })
 
     # Save final model

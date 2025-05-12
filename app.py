@@ -7,14 +7,17 @@ from pathlib import Path
 from PIL import Image
 import io
 import time  # Add time module for timing measurements
+import torch.nn.functional as F
 
 # Import LPIPS loss for perceptual similarity
 from torchcfm.models.unet import UNetModel
-from torchdyn.core import NeuralODE
 
 # Import dataset and config
 from dataset_combined import create_combined_dataloaders
-import config_for_gradio as config
+import config as config
+
+# Import detail reconstruction loss
+from detail_reconstruction_loss import DetailReconstructionLoss
 
 device = "cuda"
 
@@ -38,7 +41,8 @@ model = UNetModel(
 ).cuda()
 
 # Load the model
-model_path = "unet_for_gradio.pt"
+#model_path = "checkpoints/unet_epoch_100.pt"
+model_path = "unet_epoch_100.pt"
 if not Path(model_path).exists():
     print(f"Error: Model file {model_path} not found!")
     print("Please ensure you have the pretrained model file in the correct location.")
@@ -309,7 +313,22 @@ if __name__ == "__main__":
         """Convert normalized tensor to displayable numpy array"""
         # First move tensor to CPU before converting to numpy
         img_tensor = img_tensor.cpu()
-        return ((img_tensor.squeeze().numpy() + 1) / 2 * 255).astype(np.uint8)
+        
+        # Check if the image is single-channel (grayscale) or multi-channel (RGB)
+        if img_tensor.dim() == 3 and img_tensor.shape[0] == 1:  # Grayscale [1, H, W]
+            return ((img_tensor.squeeze().numpy() + 1) / 2 * 255).astype(np.uint8)
+        elif img_tensor.dim() == 3 and img_tensor.shape[0] == 3:  # RGB [3, H, W]
+            # Convert from CHW to HWC format for display
+            img_array = img_tensor.permute(1, 2, 0).numpy()
+            return ((img_array + 1) / 2 * 255).astype(np.uint8)
+        elif img_tensor.dim() == 4:  # Batched images [B, C, H, W]
+            if img_tensor.shape[1] == 1:  # Grayscale
+                return ((img_tensor[0, 0].numpy() + 1) / 2 * 255).astype(np.uint8)
+            else:  # RGB
+                img_array = img_tensor[0].permute(1, 2, 0).numpy()
+                return ((img_array + 1) / 2 * 255).astype(np.uint8)
+        else:
+            raise ValueError(f"Unexpected tensor shape: {img_tensor.shape}")
     
     # Function to process uploaded images
     def process_uploaded_image(uploaded_image):
@@ -334,9 +353,9 @@ if __name__ == "__main__":
         # Resize to 224x224
         image = image.resize((224, 224), Image.Resampling.LANCZOS)
         
-        # Convert to grayscale
-        if image.mode != 'L':
-            image = image.convert('L')
+        # Convert to RGB
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
         
         # Convert to numpy array
         img_array = np.array(image)
@@ -344,8 +363,8 @@ if __name__ == "__main__":
         # Normalize to [-1, 1] range
         img_array = img_array.astype(np.float32) / 127.5 - 1.0
         
-        # Convert to tensor
-        tensor = torch.from_numpy(img_array).unsqueeze(0)  # Add channel dimension
+        # Convert to tensor with proper channel dimensions
+        tensor = torch.from_numpy(img_array).permute(2, 0, 1)  # Change from HWC to CHW format
         
         return tensor
     
@@ -378,10 +397,10 @@ if __name__ == "__main__":
         subject_id, source_image = cache['subjects'][image_idx]
         source_image = source_image.unsqueeze(0).to(device)  # Add batch dimension and move to device
         
-        # Create one-hot encoding for the selected emotion
+        # Get target emotion index
         target_emotion_idx = emotion_to_idx[target_emotion_name]
-        target_emotion = torch.zeros(1, len(emotion_to_idx), device=device)
-        target_emotion[0, target_emotion_idx] = 1.0
+        # Create target emotion tensor (model expects class indices, not one-hot)
+        target_emotion = torch.tensor([target_emotion_idx], device=device)
         
         # Call generate_trajectory with all required parameters
         trajectory = generate_trajectory(model, source_image, target_emotion, device, steps=10)
@@ -402,7 +421,7 @@ if __name__ == "__main__":
     # Create the Gradio interface
     with gr.Blocks(title="Facial Expression Editing") as app:
         gr.Markdown("# Facial Expression Editing with Flow Matching")
-        gr.Markdown("1. Select a subject from the dropdown or upload your own image\n2. Choose a target emotion\n3. Click 'Generate' to create the transformation\n4. Use the slider to view the progression")
+        gr.Markdown("1. Select a subject from the dropdown or upload your own image\n2. Choose a target emotion\n3. Select solver type\n4. Click 'Generate' to create the transformation\n5. Use the slider to view the progression")
         
         with gr.Row():
             with gr.Column(scale=2):
@@ -426,10 +445,25 @@ if __name__ == "__main__":
                 )
             
             with gr.Column(scale=1):
+                solver_type = gr.Radio(
+                    choices=["euler", "adaptive"],
+                    value="euler",
+                    label="ODE Solver Type"
+                )
+                
+                adaptive_solver = gr.Dropdown(
+                    choices=["dopri5", "rk4", "euler", "midpoint"],
+                    value="dopri5",
+                    label="Adaptive Solver (if selected)",
+                    visible=False
+                )
+            
+        with gr.Row():
+            with gr.Column(scale=1):
                 generate_btn = gr.Button("Generate Transformation")
-        
-        # Add benchmark button
-        benchmark_btn = gr.Button("Run Inference Benchmark")
+            
+            with gr.Column(scale=1):
+                benchmark_btn = gr.Button("Run Inference Benchmark")
         
         with gr.Row():
             # Add image upload component
@@ -469,6 +503,13 @@ if __name__ == "__main__":
                 label="Transformation Progress"
             )
             
+        with gr.Row():
+            enhance_details = gr.Checkbox(
+                value=False,
+                label="Enhance Facial Details",
+                info="Apply detail enhancement during transformation"
+            )
+        
         output_label = gr.Label(label="Transformation Details")
         
         # Function to extract subject index from dropdown selection
@@ -505,39 +546,107 @@ if __name__ == "__main__":
                 return gr.update(value="Custom Uploaded Image"), tensor_to_display(tensor)
             return gr.update(), None
         
-        # Generate button logic
-        def generate_transformation(subject_selection, emotion_name):
+        # Add visibility toggle for adaptive solver dropdown
+        def toggle_adaptive_solver_visibility(solver_choice):
+            return gr.update(visible=solver_choice == "adaptive")
+        
+        solver_type.change(
+            toggle_adaptive_solver_visibility,
+            inputs=[solver_type],
+            outputs=[adaptive_solver]
+        )
+        
+        # Update the generate_transformation function to include solver options
+        def generate_transformation(subject_selection, emotion_name, solver_choice, adaptive_solver_choice, enhance_details):
             idx = get_subject_idx(subject_selection)
             
             # Get the appropriate source image
             if idx == -1:  # Custom uploaded image
                 if cache['custom_image'] is None:
                     return gr.update(), [], gr.update(), "No custom image uploaded", None
-                source_image = cache['custom_image'].unsqueeze(0).to(device)
+                source_image = cache['custom_image'].unsqueeze(0).to(device)  # Add batch dimension
                 subject_label = "Custom Image"
             else:
                 # Regular subject from dataset
                 if not 0 <= idx < len(cache['subjects']):
                     return gr.update(), [], gr.update(), "Invalid subject selection", None
                 subject_id, source_image = cache['subjects'][idx]
-                source_image = source_image.unsqueeze(0).to(device)
+                source_image = source_image.unsqueeze(0).to(device)  # Add batch dimension
                 subject_label = f"Subject {idx} ({subject_id})"
             
-            # Create one-hot encoding for the selected emotion
+            # Get target emotion index
             target_emotion_idx = emotion_to_idx[emotion_name]
-            target_emotion = torch.zeros(1, len(emotion_to_idx), device=device)
-            target_emotion[0, target_emotion_idx] = 1.0
+            # Create target emotion tensor (model expects class indices, not one-hot)
+            target_emotion = torch.tensor([target_emotion_idx], device=device)
             
-            # Call generate_trajectory with all required parameters
-            trajectory = generate_trajectory(model, source_image, target_emotion, device, steps=10)
+            # Call generate_trajectory with all required parameters including solver choice
+            trajectory = generate_trajectory(
+                model, 
+                source_image, 
+                target_emotion, 
+                device, 
+                steps=10, 
+                solver_type=solver_choice,
+                adaptive_solver=adaptive_solver_choice
+            )
             
             # Convert frames for display
             frames = [tensor_to_display(frame[0]) for frame in trajectory]
             
-            caption = f"{subject_label} → {emotion_name}"
+            caption = f"{subject_label} → {emotion_name} (Solver: {solver_choice}" + (f", {adaptive_solver_choice})" if solver_choice == "adaptive" else ")")
             
             # Also update the source preview
             source_preview = tensor_to_display(source_image[0])
+            
+            # Apply detail enhancement if requested
+            if enhance_details and frames:
+                # Extract the final frame
+                final_frame = frames[-1]
+                
+                # Create a simple enhancement filter (Unsharp Mask)
+                with torch.no_grad():
+                    # Define a Gaussian blur kernel
+                    kernel_size = 5
+                    sigma = 1.0
+                    channels = final_frame.shape[1]
+                    
+                    # Create a 2D Gaussian kernel
+                    x_cord = torch.arange(kernel_size).float()
+                    x_grid = x_cord.repeat(kernel_size).view(kernel_size, kernel_size)
+                    y_grid = x_grid.t()
+                    xy_grid = torch.stack([x_grid, y_grid], dim=-1)
+                    
+                    mean = (kernel_size - 1) / 2.
+                    variance = sigma**2
+                    
+                    # Calculate the 2D Gaussian kernel
+                    gaussian_kernel = torch.exp(
+                        -torch.sum((xy_grid - mean)**2., dim=-1) / (2*variance)
+                    )
+                    gaussian_kernel = gaussian_kernel / gaussian_kernel.sum()
+                    
+                    # Create the gaussian kernel
+                    gaussian_kernel = gaussian_kernel.view(1, 1, kernel_size, kernel_size)
+                    gaussian_kernel = gaussian_kernel.repeat(channels, 1, 1, 1).to(device)
+                    
+                    # Apply gaussian blur
+                    padding = (kernel_size - 1) // 2
+                    blurred = F.conv2d(
+                        final_frame, 
+                        gaussian_kernel, 
+                        padding=padding, 
+                        groups=channels
+                    )
+                    
+                    # Apply unsharp masking: enhanced = original + amount * (original - blurred)
+                    amount = 0.5  # Enhancement strength
+                    enhanced_frame = final_frame + amount * (final_frame - blurred)
+                    
+                    # Clamp values
+                    enhanced_frame = torch.clamp(enhanced_frame, -1.0, 1.0)
+                    
+                    # Replace the final frame with the enhanced version
+                    frames[-1] = enhanced_frame
             
             return gr.update(value=0, maximum=len(frames)-1), frames, gr.update(value=frames[0]), caption, source_preview
         
@@ -557,7 +666,7 @@ if __name__ == "__main__":
         
         generate_btn.click(
             generate_transformation,
-            inputs=[subject_dropdown, target_emotion],
+            inputs=[subject_dropdown, target_emotion, solver_type, adaptive_solver, enhance_details],
             outputs=[slider, frames_store, output_image, output_label, source_preview]
         )
         
@@ -576,3 +685,77 @@ if __name__ == "__main__":
     
     # Launch the app
     app.launch(share=True)
+
+class DetailReconstructionLoss(nn.Module):
+    def __init__(self, device, weight=1.0):
+        """
+        Detail reconstruction loss to preserve high-frequency facial details
+        
+        Args:
+            device: Computation device
+            weight: Weight for the loss
+        """
+        super().__init__()
+        self.device = device
+        self.weight = weight
+        
+        # Create Laplacian kernel for edge detection
+        laplacian_kernel = torch.tensor([
+            [0, 1, 0],
+            [1, -4, 1],
+            [0, 1, 0]
+        ], dtype=torch.float32).view(1, 1, 3, 3).to(device)
+        
+        self.laplacian_kernel = laplacian_kernel.repeat(3, 1, 1, 1)
+        
+        # MSE loss for comparing details
+        self.mse = nn.MSELoss()
+        
+    def extract_details(self, image):
+        """
+        Extract high-frequency details using Laplacian filtering
+        
+        Args:
+            image: Input image tensor (B, C, H, W)
+            
+        Returns:
+            Details tensor
+        """
+        # Apply padding to maintain original dimensions
+        padded = F.pad(image, (1, 1, 1, 1), mode='reflect')
+        
+        # Apply the Laplacian filter to extract high-frequency details
+        details = F.conv2d(padded, self.laplacian_kernel, groups=3)
+        
+        return details
+    
+    def forward(self, generated_images, source_images):
+        """
+        Compute detail preservation loss between generated and source images
+        
+        Args:
+            generated_images: Generated face images with new expressions (B, C, H, W)
+            source_images: Original source face images (B, C, H, W)
+            
+        Returns:
+            loss: Detail preservation loss (scalar)
+        """
+        # Handle grayscale to RGB conversion if needed
+        if generated_images.shape[1] == 1:
+            generated_images = generated_images.repeat(1, 3, 1, 1)
+        if source_images.shape[1] == 1:
+            source_images = source_images.repeat(1, 3, 1, 1)
+        
+        # Extract high-frequency details
+        source_details = self.extract_details(source_images)
+        generated_details = self.extract_details(generated_images)
+        
+        # Calculate the MSE between details
+        detail_loss = self.mse(generated_details, source_details)
+        
+        return self.weight * detail_loss
+
+# Detail Reconstruction loss settings
+USE_DETAIL_LOSS = True
+DETAIL_LOSS_WEIGHT = 0.3
+DETAIL_LOSS_DELAY_EPOCHS = 1

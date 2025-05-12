@@ -1,5 +1,6 @@
 env/
-data/*
+data/CK+_aligned/
+data/KDEF_aligned/
 __pycache__/
 output/
 wandb

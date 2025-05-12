@@ -8,6 +8,11 @@ from collections import defaultdict
 import os
 import random
 import numpy as np
+from config import (
+    AUGMENT_ROTATION_RANGE, 
+    AUGMENT_BRIGHTNESS_RANGE, 
+    AUGMENT_CONTRAST_RANGE
+)
 
 class PairedTransform:
     """
@@ -29,9 +34,14 @@ class PairedTransform:
                 source_img = F.hflip(source_img)
                 target_img = F.hflip(target_img)
             
+            # Apply the SAME random rotation to both images
+            rotation_angle = random.uniform(AUGMENT_ROTATION_RANGE[0], AUGMENT_ROTATION_RANGE[1])
+            source_img = F.rotate(source_img, rotation_angle)
+            target_img = F.rotate(target_img, rotation_angle)
+            
             # Apply the SAME random brightness/contrast adjustment
-            brightness_factor = 1.0 + random.uniform(-0.3, 0.3)
-            contrast_factor = 1.0 + random.uniform(-0.3, 0.3)
+            brightness_factor = 1.0 + random.uniform(AUGMENT_BRIGHTNESS_RANGE[0], AUGMENT_BRIGHTNESS_RANGE[1])
+            contrast_factor = 1.0 + random.uniform(AUGMENT_CONTRAST_RANGE[0], AUGMENT_CONTRAST_RANGE[1])
             
             source_img = F.adjust_brightness(source_img, brightness_factor)
             source_img = F.adjust_contrast(source_img, contrast_factor)
@@ -260,7 +270,8 @@ class KDEFNeutralHappyDataset(KDEFPairedDataset):
         super().__init__(data_path, split_df, image_size, augmentation_factor, 
                          target_emotion='happiness')
 
-def create_dataloaders(data_path,
+def create_dataloaders(kdef_data_path,
+                       ckplus_data_path=None,  # for compatibility
                        image_size=224,
                        batch_size=16, 
                        num_workers=2,
@@ -283,7 +294,7 @@ def create_dataloaders(data_path,
         Tuple of (train_loader, test_loader)
     """
     # Load the processed data
-    with open(data_path, 'rb') as f:
+    with open(kdef_data_path, 'rb') as f:
         data = pickle.load(f)
     
     df = data['dataset_df']
@@ -309,7 +320,7 @@ def create_dataloaders(data_path,
     
     # Create datasets
     train_dataset = KDEFPairedDataset(
-        data_path, 
+        kdef_data_path, 
         split_df=train_df,
         image_size=image_size, 
         augmentation_factor=augmentation_factor,
@@ -317,7 +328,7 @@ def create_dataloaders(data_path,
     )
     
     test_dataset = KDEFPairedDataset(
-        data_path, 
+        kdef_data_path, 
         split_df=test_df,
         image_size=image_size, 
         augmentation_factor=0,  # No augmentation for test set

@@ -9,6 +9,12 @@ IMAGE_SIZE = 224
 BATCH_SIZE = 16
 NUM_WORKERS = 4
 
+# Augmentation settings
+AUGMENTATION_FACTOR = 8
+AUGMENT_ROTATION_RANGE = (-5, 5)  # Degrees
+AUGMENT_BRIGHTNESS_RANGE = (-0.3, 0.3)  # Factor added to 1.0
+AUGMENT_CONTRAST_RANGE = (-0.3, 0.3)  # Factor added to 1.0
+
 # Model settings
 IN_CHANNELS = 3
 MODEL_CHANNELS = 8
@@ -35,7 +41,7 @@ EULER_STEPS = 5
 
 # LPIPS loss settings
 USE_LPIPS_LOSS = True
-LPIPS_LOSS_WEIGHT = 0.05  # Reduced from 0.1 to better balance with other losses
+LPIPS_LOSS_WEIGHT = 0.1 # Reduced from 0.1 to better balance with other losses
 LPIPS_LOSS_DELAY_EPOCHS = 1
 LPIPS_NET = 'vgg'  # Network backbone for LPIPS ('vgg', 'alex', or 'squeeze')
 
@@ -43,8 +49,8 @@ LPIPS_NET = 'vgg'  # Network backbone for LPIPS ('vgg', 'alex', or 'squeeze')
 SEED = 42
 LEARNING_RATE = 1e-5
 WEIGHT_DECAY = 1e-5
-EPOCHS = 100
-GRAD_CLIP_NORM = 1.5
+EPOCHS = 120
+GRAD_CLIP_NORM = 1.7
 EVALUATION_INTERVAL = 3
 SAVE_BEST_ONLY = True
 
@@ -65,4 +71,10 @@ LOG_TO_WANDB = True
 WANDB_PROJECT = 'emoflow'
 EXPERIMENT_NAME = 'experiment'
 LOG_INTERVAL = 10
+
+# ODE Solver settings
+ODE_SOLVER = "euler"  # Options: "euler", "adaptive"
+ADAPTIVE_SOLVER_TYPE = "dopri5"  # Options: "dopri5", "rk4"
+ADAPTIVE_ATOL = 1e-4
+ADAPTIVE_RTOL = 1e-4
 

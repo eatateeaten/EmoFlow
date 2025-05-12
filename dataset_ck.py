@@ -8,6 +8,11 @@ from collections import defaultdict
 import os
 import random
 import numpy as np
+from config import (
+    AUGMENT_ROTATION_RANGE, 
+    AUGMENT_BRIGHTNESS_RANGE, 
+    AUGMENT_CONTRAST_RANGE
+)
 
 class PairedTransform:
     """
@@ -29,9 +34,14 @@ class PairedTransform:
                 source_img = F.hflip(source_img)
                 target_img = F.hflip(target_img)
             
+            # Apply the SAME random rotation to both images
+            rotation_angle = random.uniform(AUGMENT_ROTATION_RANGE[0], AUGMENT_ROTATION_RANGE[1])
+            source_img = F.rotate(source_img, rotation_angle)
+            target_img = F.rotate(target_img, rotation_angle)
+            
             # Apply the SAME random brightness/contrast adjustment
-            brightness_factor = 1.0 + random.uniform(-0.3, 0.3)
-            contrast_factor = 1.0 + random.uniform(-0.3, 0.3)
+            brightness_factor = 1.0 + random.uniform(AUGMENT_BRIGHTNESS_RANGE[0], AUGMENT_BRIGHTNESS_RANGE[1])
+            contrast_factor = 1.0 + random.uniform(AUGMENT_CONTRAST_RANGE[0], AUGMENT_CONTRAST_RANGE[1])
             
             source_img = F.adjust_brightness(source_img, brightness_factor)
             source_img = F.adjust_contrast(source_img, contrast_factor)

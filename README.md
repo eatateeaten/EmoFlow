@@ -26,6 +26,13 @@ pip install -r requirements.txt
 python patch.py  # fix the path in the file if it's not correct
 ```
 
+4. Unzip data:
+```bash
+cd data
+unzip CK+_aligned.zip
+unzip KDEF_aligned.zip
+```
+
 ## Usage
 
 ### Training
