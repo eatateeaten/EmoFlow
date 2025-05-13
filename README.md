@@ -2,7 +2,7 @@
 
 # Facial Expression Editing System
 
-A deep learning system for editing facial expressions while preserving identity, using a UNet-based Conditional Flow Matching approach.
+A fast-as-f(>80fps) for editing facial expressions while preserving identity, using a UNet-based Conditional Flow Matching approach.
 
 ## Features
 
