@@ -16,9 +16,6 @@ from torchcfm.models.unet import UNetModel
 from dataset_combined import create_combined_dataloaders
 import config as config
 
-# Import detail reconstruction loss
-from detail_reconstruction_loss import DetailReconstructionLoss
-
 device = "cuda"
 
 # Initialize the model with aggressive downsampling
@@ -41,8 +38,7 @@ model = UNetModel(
 ).cuda()
 
 # Load the model
-#model_path = "checkpoints/unet_epoch_100.pt"
-model_path = "unet_epoch_100.pt"
+model_path = "checkpoints/unet_epoch_100.pt"
 if not Path(model_path).exists():
     print(f"Error: Model file {model_path} not found!")
     print("Please ensure you have the pretrained model file in the correct location.")
@@ -96,7 +92,7 @@ def euler_integrate(model, source_image, target_emotion, device, steps=5, requir
             x = torch.clamp(x, -1.0, 1.0)
     return x
 
-def generate_trajectory(model, source_image, target_emotion, device, steps=10):
+def generate_trajectory(model, source_image, target_emotion, device, steps=10, solver_type="euler", adaptive_solver="dopri5"):
     """
     Generate a transformed image using the trained model
 
@@ -106,6 +102,8 @@ def generate_trajectory(model, source_image, target_emotion, device, steps=10):
         target_emotion: Target emotion one-hot tensor or class index
         device: Computation device
         steps: Number of steps for trajectory generation
+        solver_type: Type of ODE solver to use ("euler" or "adaptive")
+        adaptive_solver: Specific adaptive solver to use if solver_type is "adaptive"
 
     Returns:
         List of intermediate trajectory frames
@@ -132,30 +130,76 @@ def generate_trajectory(model, source_image, target_emotion, device, steps=10):
     # Store the initial source image
     frames.append(source_image.clone())
     
-    # Set up trajectory generation
-    dt = 1.0 / steps
-    t_steps = torch.linspace(0, 1.0 - dt, steps).to(device)
-    x = source_image.clone()
-    
     # Timing the inference process
     start_time = time.time()
     
-    with torch.no_grad():
-        for t in t_steps:
-            # Create a batch of time values
-            t_batch = torch.ones(x.shape[0], device=device) * t
+    # Choose solver based on solver_type parameter
+    if solver_type == "euler":
+        # Euler integration
+        dt = 1.0 / steps
+        t_steps = torch.linspace(0, 1.0 - dt, steps).to(device)
+        x = source_image.clone()
+        
+        with torch.no_grad():
+            for t in t_steps:
+                # Create a batch of time values
+                t_batch = torch.ones(x.shape[0], device=device) * t
+                
+                # Predict the flow field
+                v = model(t_batch, x, y=target_emotion)
+                
+                # Update the current state
+                x = x + dt * v
+                
+                # Clamp values to prevent underflow/overflow
+                x = torch.clamp(x, -1.0, 1.0)
+                
+                # Store the updated state
+                frames.append(x.clone())
+    
+    elif solver_type == "adaptive":
+        # Use torchdyn for adaptive solvers
+        from torchdyn.core import NeuralODE
+        
+        # Define vector field as a class for torchdyn
+        class UNetVectorField(nn.Module):
+            def __init__(self, unet_model, target_emotion):
+                super().__init__()
+                self.unet_model = unet_model
+                self.target_emotion = target_emotion
+
+            def forward(self, t, x, *args, **kwargs):
+                # Create a batch of time values
+                t_batch = torch.ones(x.shape[0], device=x.device) * t.to(x.device)
+                # UNetModel expects (t, x, y) parameter order
+                return self.unet_model(t_batch, x, y=self.target_emotion)
+        
+        # Create vector field and Neural ODE
+        vector_field = UNetVectorField(model, target_emotion)
+        neural_ode = NeuralODE(
+            vector_field, 
+            sensitivity='adjoint',
+            solver=adaptive_solver,
+            atol=1e-4,
+            rtol=1e-4
+        )
+        
+        # Create evenly spaced time points for visualization
+        t_eval = torch.linspace(0, 1.0, steps + 1, device=device)
+        
+        with torch.no_grad():
+            # Generate full trajectory
+            trajectory = neural_ode.trajectory(
+                source_image,
+                t_span=torch.tensor([0., 1.], device=device),
+                t_eval=t_eval
+            )
             
-            # Predict the flow field
-            v = model(t_batch, x, y=target_emotion)
-            
-            # Update the current state
-            x = x + dt * v
-            
-            # Clamp values to prevent underflow/overflow
-            x = torch.clamp(x, -1.0, 1.0)
-            
-            # Store the updated state
-            frames.append(x.clone())
+            # Store all frames
+            frames = [x.clone() for x in trajectory]
+    
+    else:
+        raise ValueError(f"Unknown solver type: {solver_type}. Use 'euler' or 'adaptive'.")
     
     # Calculate total inference time
     inference_time = time.time() - start_time
@@ -165,89 +209,9 @@ def generate_trajectory(model, source_image, target_emotion, device, steps=10):
     print(f"Inference time: {inference_time:.4f} seconds")
     print(f"Time per step: {inference_time_per_step:.4f} seconds")
     print(f"Time per image per step: {inference_time_per_image:.4f} seconds")
+    print(f"Solver type: {solver_type}" + (f", {adaptive_solver}" if solver_type == "adaptive" else ""))
     
     return frames
-
-# Add a dedicated timing function for benchmarking
-def benchmark_inference(batch_sizes=[1, 4, 8], steps=10, num_runs=10):
-    """
-    Benchmark inference time for different batch sizes
-    
-    Args:
-        batch_sizes: List of batch sizes to test
-        steps: Number of steps in trajectory generation
-        num_runs: Number of runs for each batch size
-    
-    Returns:
-        Dictionary of results
-    """
-    model.eval()  # Ensure model is in evaluation mode
-    
-    # Create a neutral face as source
-    if len(cache['subjects']) > 0:
-        _, source_image = cache['subjects'][0]
-        source_image = source_image.to(device)
-    else:
-        # Create a dummy tensor if no subjects are available
-        source_image = torch.zeros((1, config.IMAGE_SIZE, config.IMAGE_SIZE), device=device)
-    
-    # Target emotion (happiness)
-    target_emotion_idx = emotion_to_idx['happiness']
-    
-    results = {}
-    
-    for batch_size in batch_sizes:
-        # Create batch by repeating the source image
-        batch = source_image.repeat(batch_size, 1, 1, 1)
-        
-        # Create target emotion batch
-        target_emotion = torch.zeros(batch_size, dtype=torch.long, device=device)
-        target_emotion.fill_(target_emotion_idx)
-        
-        # Warmup run
-        with torch.no_grad():
-            _ = euler_integrate(model, batch, target_emotion, device, steps=steps)
-        
-        # Multiple timed runs
-        times = []
-        for _ in range(num_runs):
-            torch.cuda.synchronize() if torch.cuda.is_available() else None
-            start_time = time.time()
-            
-            with torch.no_grad():
-                _ = euler_integrate(model, batch, target_emotion, device, steps=steps)
-            
-            torch.cuda.synchronize() if torch.cuda.is_available() else None
-            inference_time = time.time() - start_time
-            times.append(inference_time)
-        
-        # Calculate statistics
-        mean_time = np.mean(times)
-        std_time = np.std(times)
-        min_time = np.min(times)
-        max_time = np.max(times)
-        
-        # Time per image
-        mean_time_per_image = mean_time / batch_size
-        
-        results[batch_size] = {
-            'mean_time': mean_time,
-            'std_time': std_time,
-            'min_time': min_time,
-            'max_time': max_time,
-            'mean_time_per_image': mean_time_per_image,
-            'steps': steps,
-            'num_runs': num_runs
-        }
-        
-        print(f"Batch size: {batch_size}")
-        print(f"  Mean inference time: {mean_time:.4f} seconds")
-        print(f"  Mean time per image: {mean_time_per_image:.4f} seconds")
-        print(f"  Standard deviation: {std_time:.4f} seconds")
-        print(f"  Min time: {min_time:.4f} seconds")
-        print(f"  Max time: {max_time:.4f} seconds")
-    
-    return results
 
 # Add Gradio app functionality
 if __name__ == "__main__":
@@ -258,6 +222,19 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    # List of available emotions (excluding neutral which is the source)
+    emotions = ['anger', 'contempt', 'disgust', 'fear', 'happiness', 'sadness', 'surprise']
+    emotion_to_idx = {
+        'neutral': 0, 
+        'anger': 1, 
+        'contempt': 2, 
+        'disgust': 3, 
+        'fear': 4, 
+        'happiness': 5, 
+        'sadness': 6, 
+        'surprise': 7
+    }
+    
     # Load validation dataset
     print("Loading validation dataset...")
     _, val_loader = create_combined_dataloaders(
@@ -274,6 +251,9 @@ if __name__ == "__main__":
     unique_subjects = {}
     subject_ids = set()
     
+    # Track valid subject-emotion combinations
+    valid_subject_emotion_pairs = {}
+    
     # Iterate through the entire validation set
     for batch in tqdm(val_loader):
         for i in range(len(batch['source_image'])):
@@ -289,23 +269,32 @@ if __name__ == "__main__":
             if subject_id not in subject_ids:
                 subject_ids.add(subject_id)
                 unique_subjects[subject_id] = batch['source_image'][i]
+            
+            # Record the emotion for this subject (assuming target_one_hot is available)
+            if 'target_one_hot' in batch:
+                emotion_idx = torch.argmax(batch['target_one_hot'][i]).item()
+                emotion_name = list(emotion_to_idx.keys())[list(emotion_to_idx.values()).index(emotion_idx)]
+                
+                # Initialize an empty set if this subject isn't in the dict yet
+                if subject_id not in valid_subject_emotion_pairs:
+                    valid_subject_emotion_pairs[subject_id] = set()
+                
+                # Add this emotion to the subject's valid emotions
+                valid_subject_emotion_pairs[subject_id].add(emotion_name)
     
     print(f"Found {len(unique_subjects)} unique subjects in validation set")
+    
+    # Log available emotions for each subject
+    for subject_id, emotions_set in valid_subject_emotion_pairs.items():
+        print(f"Subject {subject_id} has {len(emotions_set)} emotions: {', '.join(emotions_set)}")
     
     # Convert to list for easier indexing
     all_subjects = list(unique_subjects.items())
     
-    # List of available emotions (excluding neutral which is the source)
-    emotions = ['anger', 'contempt', 'disgust', 'fear', 'happiness', 'sadness', 'surprise']
-    emotion_to_idx = {
-        'neutral': 0, 
-        'anger': 1, 
-        'contempt': 2, 
-        'disgust': 3, 
-        'fear': 4, 
-        'happiness': 5, 
-        'sadness': 6, 
-        'surprise': 7
+    # Cache for the current data
+    cache = {
+        'subjects': all_subjects,
+        'custom_image': None  # Will store the uploaded image tensor
     }
     
     # Convert images for display
@@ -367,12 +356,6 @@ if __name__ == "__main__":
         tensor = torch.from_numpy(img_array).permute(2, 0, 1)  # Change from HWC to CHW format
         
         return tensor
-    
-    # Cache for the current data
-    cache = {
-        'subjects': all_subjects,
-        'custom_image': None  # Will store the uploaded image tensor
-    }
     
     def load_gallery_images():
         """Load all unique subjects for the gallery"""
@@ -461,9 +444,6 @@ if __name__ == "__main__":
         with gr.Row():
             with gr.Column(scale=1):
                 generate_btn = gr.Button("Generate Transformation")
-            
-            with gr.Column(scale=1):
-                benchmark_btn = gr.Button("Run Inference Benchmark")
         
         with gr.Row():
             # Add image upload component
@@ -502,14 +482,7 @@ if __name__ == "__main__":
                 value=0,
                 label="Transformation Progress"
             )
-            
-        with gr.Row():
-            enhance_details = gr.Checkbox(
-                value=False,
-                label="Enhance Facial Details",
-                info="Apply detail enhancement during transformation"
-            )
-        
+
         output_label = gr.Label(label="Transformation Details")
         
         # Function to extract subject index from dropdown selection
@@ -556,8 +529,8 @@ if __name__ == "__main__":
             outputs=[adaptive_solver]
         )
         
-        # Update the generate_transformation function to include solver options
-        def generate_transformation(subject_selection, emotion_name, solver_choice, adaptive_solver_choice, enhance_details):
+        # Update the generate_transformation function to check for valid subject-emotion pairs
+        def generate_transformation(subject_selection, emotion_name, solver_choice, adaptive_solver_choice):
             idx = get_subject_idx(subject_selection)
             
             # Get the appropriate source image
@@ -566,6 +539,7 @@ if __name__ == "__main__":
                     return gr.update(), [], gr.update(), "No custom image uploaded", None
                 source_image = cache['custom_image'].unsqueeze(0).to(device)  # Add batch dimension
                 subject_label = "Custom Image"
+                subject_id = "custom"
             else:
                 # Regular subject from dataset
                 if not 0 <= idx < len(cache['subjects']):
@@ -573,6 +547,16 @@ if __name__ == "__main__":
                 subject_id, source_image = cache['subjects'][idx]
                 source_image = source_image.unsqueeze(0).to(device)  # Add batch dimension
                 subject_label = f"Subject {idx} ({subject_id})"
+            
+            # Check if this subject-emotion pair exists in the validation set
+            valid_pair = True
+            warning_message = ""
+            
+            if subject_id != "custom" and subject_id in valid_subject_emotion_pairs:
+                if emotion_name not in valid_subject_emotion_pairs[subject_id]:
+                    valid_pair = False
+                    available_emotions = ", ".join(valid_subject_emotion_pairs[subject_id])
+                    warning_message = f"Warning: No '{emotion_name}' expression available for {subject_label}.\nAvailable emotions: {available_emotions}.\nGenerated result may be unreliable."
             
             # Get target emotion index
             target_emotion_idx = emotion_to_idx[emotion_name]
@@ -593,60 +577,12 @@ if __name__ == "__main__":
             # Convert frames for display
             frames = [tensor_to_display(frame[0]) for frame in trajectory]
             
-            caption = f"{subject_label} → {emotion_name} (Solver: {solver_choice}" + (f", {adaptive_solver_choice})" if solver_choice == "adaptive" else ")")
+            # Prepare caption with warning if needed
+            base_caption = f"{subject_label} → {emotion_name} (Solver: {solver_choice}" + (f", {adaptive_solver_choice})" if solver_choice == "adaptive" else ")")
+            caption = warning_message + "\n" + base_caption if warning_message else base_caption
             
             # Also update the source preview
             source_preview = tensor_to_display(source_image[0])
-            
-            # Apply detail enhancement if requested
-            if enhance_details and frames:
-                # Extract the final frame
-                final_frame = frames[-1]
-                
-                # Create a simple enhancement filter (Unsharp Mask)
-                with torch.no_grad():
-                    # Define a Gaussian blur kernel
-                    kernel_size = 5
-                    sigma = 1.0
-                    channels = final_frame.shape[1]
-                    
-                    # Create a 2D Gaussian kernel
-                    x_cord = torch.arange(kernel_size).float()
-                    x_grid = x_cord.repeat(kernel_size).view(kernel_size, kernel_size)
-                    y_grid = x_grid.t()
-                    xy_grid = torch.stack([x_grid, y_grid], dim=-1)
-                    
-                    mean = (kernel_size - 1) / 2.
-                    variance = sigma**2
-                    
-                    # Calculate the 2D Gaussian kernel
-                    gaussian_kernel = torch.exp(
-                        -torch.sum((xy_grid - mean)**2., dim=-1) / (2*variance)
-                    )
-                    gaussian_kernel = gaussian_kernel / gaussian_kernel.sum()
-                    
-                    # Create the gaussian kernel
-                    gaussian_kernel = gaussian_kernel.view(1, 1, kernel_size, kernel_size)
-                    gaussian_kernel = gaussian_kernel.repeat(channels, 1, 1, 1).to(device)
-                    
-                    # Apply gaussian blur
-                    padding = (kernel_size - 1) // 2
-                    blurred = F.conv2d(
-                        final_frame, 
-                        gaussian_kernel, 
-                        padding=padding, 
-                        groups=channels
-                    )
-                    
-                    # Apply unsharp masking: enhanced = original + amount * (original - blurred)
-                    amount = 0.5  # Enhancement strength
-                    enhanced_frame = final_frame + amount * (final_frame - blurred)
-                    
-                    # Clamp values
-                    enhanced_frame = torch.clamp(enhanced_frame, -1.0, 1.0)
-                    
-                    # Replace the final frame with the enhanced version
-                    frames[-1] = enhanced_frame
             
             return gr.update(value=0, maximum=len(frames)-1), frames, gr.update(value=frames[0]), caption, source_preview
         
@@ -666,15 +602,8 @@ if __name__ == "__main__":
         
         generate_btn.click(
             generate_transformation,
-            inputs=[subject_dropdown, target_emotion, solver_type, adaptive_solver, enhance_details],
+            inputs=[subject_dropdown, target_emotion, solver_type, adaptive_solver],
             outputs=[slider, frames_store, output_image, output_label, source_preview]
-        )
-        
-        # Add benchmark button handler
-        benchmark_btn.click(
-            lambda: benchmark_inference(batch_sizes=[1, 4, 8, 16]),
-            inputs=[],
-            outputs=[]
         )
         
         slider.change(
@@ -754,8 +683,3 @@ class DetailReconstructionLoss(nn.Module):
         detail_loss = self.mse(generated_details, source_details)
         
         return self.weight * detail_loss
-
-# Detail Reconstruction loss settings
-USE_DETAIL_LOSS = True
-DETAIL_LOSS_WEIGHT = 0.3
-DETAIL_LOSS_DELAY_EPOCHS = 1

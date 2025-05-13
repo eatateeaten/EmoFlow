@@ -20,11 +20,10 @@ from torchdyn.core import NeuralODE
 # Format: [(subject_id, emotion), ...]
 # Leave empty to use random selection
 SELECTED_PAIRS = [
-    ('S129', 'surprise'),   # CK+ subject
-    ('S076', 'happiness'),  # CK+ subject
-    ('K3', 'surprise'),       # KDEF subject
-    ('K68', 'happiness'),      # KDEF subject
-    ('K35', 'anger')     # KDEF subject
+    ('S116', 'happiness'),
+    ('S116', 'disgust'),
+    ('K68', 'disgust'),
+    ('K68', 'surprise'),
 ]
 
 def set_seed(seed):
@@ -488,7 +487,7 @@ def evaluate_model(model_path, output_path=None, selected_pairs=None,
     if output_path is None:
         # Create a default output path with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"evaluation_grid_{timestamp}.png"
+        output_path = f"eval/evaluation_grid_{timestamp}.png"
     
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"Main comparison grid saved to {output_path}")
@@ -503,7 +502,7 @@ def evaluate_model(model_path, output_path=None, selected_pairs=None,
             # Create a unique filename for this subject-emotion pair
             subject_id = sample['subject_id']
             target_emotion = sample['target_emotion']
-            trajectory_path = f"trajectory_{subject_id}_{target_emotion}.png"
+            trajectory_path = f"eval/trajectory_{subject_id}_{target_emotion}.png"
             
             # Create and save the trajectory comparison grid
             path = create_trajectory_comparison_grid(
