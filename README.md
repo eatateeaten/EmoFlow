@@ -1,4 +1,4 @@
-![Uploading image.png…]()
+![image](https://github.com/user-attachments/assets/561281d9-bc6a-48c2-a56f-c2556a06a024)
 
 
 # Facial Expression Editing System
