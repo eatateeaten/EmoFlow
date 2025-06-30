@@ -3,7 +3,7 @@
 
 # Facial Expression Editing System
 
-A fast-as-f(>80fps) for editing facial expressions while preserving identity, using a UNet-based Conditional Flow Matching approach.
+(>80fps) for editing facial expressions while preserving identity, using a UNet-based Conditional Flow Matching approach.
 
 ## Features
 
