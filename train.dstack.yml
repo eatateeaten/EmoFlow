@@ -1,0 +1,11 @@
+type: task 
+
+python: 3.10
+
+commands:
+  - pip install
+  - python patch.py
+  - python train.py
+
+resources:
+  gpu: 24GB
